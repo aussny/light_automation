@@ -20,6 +20,10 @@
 #include "lwip/ip_addr.h"
 #include "esp_sntp.h"
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "rtc_wdt.h"
 
 static const char *TAG = "example";
 
@@ -28,6 +32,7 @@ static const char *TAG = "example";
 #endif
 
 #define BLINK_GPIO 2
+#define SENSOR_GPIO 17
 
 /* Variable holding number of times ESP32 restarted since first boot.
  * It is placed into RTC memory using RTC_DATA_ATTR and
@@ -36,17 +41,89 @@ static const char *TAG = "example";
 // RTC_DATA_ATTR static int boot_count = 0;
 
 static void obtain_time(void);
+static int8_t setup_procedure(void);
+void blink_LED(int8_t numCycles);
+void configure_GPIOS(void);
+void time_sync_notification_cb(struct timeval *tv);
+
+// void watchdogHandler(void* pData)
+// {
+//     rtc_wdt_feed();
+//     vTaskDelay(100 / portTICK_PERIOD_MS);
+//     vTaskDelete(NULL);
+// }
+
+void app_main(void)
+{
+    int8_t currentTime = setup_procedure();
+    bool motionDetected = false;
+
+    while(1)
+    {
+        if (gpio_get_level(SENSOR_GPIO) == 1)
+        {
+            gpio_set_level(BLINK_GPIO, 1);
+            if (motionDetected == false)
+            {
+                ESP_LOGI(TAG, "MOTION DETECTED!");
+                motionDetected = true;
+                
+            }
+            vTaskDelay( 5000 / portTICK_PERIOD_MS);
+        }
+        else
+        {
+            gpio_set_level(BLINK_GPIO, 0);
+            if (motionDetected == true)
+            {
+                ESP_LOGI(TAG, "MOTION NO LONGER DETECTED!");
+                motionDetected = false;
+            }
+            vTaskDelay( 100 / portTICK_PERIOD_MS);
+        }
+    }
+}
+
+static int8_t setup_procedure(void)
+{
+    configure_GPIOS();
+    gpio_set_level(BLINK_GPIO, 1);
+
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    // Is time set? If not, tm_year will be (1970 - 1900).
+    if (timeinfo.tm_year < (2016 - 1900)) {
+        ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
+        obtain_time();
+        // update 'now' variable with current time
+        time(&now);
+    }
+
+    char strftime_buf[64];
+    setenv("TZ", "CST6EDT,M3.2.0/2,M11.1.0", 1); // Dallas
+    tzset();
+    localtime_r(&now, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "The current date/time in Dallas is: %s", strftime_buf);
+    ESP_LOGI(TAG, "The hours is: %d", timeinfo.tm_hour);
+    gpio_set_level(BLINK_GPIO, 0);
+    blink_LED(timeinfo.tm_hour);
+    return timeinfo.tm_hour;
+}
 
 void time_sync_notification_cb(struct timeval *tv)
 {
     ESP_LOGI(TAG, "Notification of a time synchronization event");
 }
 
-void configure_LED(void)
+void configure_GPIOS(void)
 {
     gpio_reset_pin(BLINK_GPIO);
-    /* Set the GPIO as a push/pull output */
+    gpio_reset_pin(SENSOR_GPIO);
     gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SENSOR_GPIO, GPIO_MODE_INPUT);
 }
 
 void blink_LED(int8_t numCycles)
@@ -62,42 +139,6 @@ void blink_LED(int8_t numCycles)
     }
     gpio_set_level(BLINK_GPIO, 0);
 
-}
-
-void app_main(void)
-{
-    configure_LED();
-
-    // ++boot_count;
-    // ESP_LOGI(TAG, "Boot count: %d", boot_count);
-
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
-    // Is time set? If not, tm_year will be (1970 - 1900).
-    if (timeinfo.tm_year < (2016 - 1900)) {
-        ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
-        obtain_time();
-        // update 'now' variable with current time
-        time(&now);
-    }
-
-    char strftime_buf[64];
-
-    // Set timezone to Eastern Standard Time and print local time
-    // setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1); // New York
-    setenv("TZ", "CST6EDT,M3.2.0/2,M11.1.0", 1); // Dallas
-    tzset();
-    localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "The current date/time in Dallas is: %s", strftime_buf);
-    ESP_LOGI(TAG, "The hours is: %d", timeinfo.tm_hour);
-    blink_LED(timeinfo.tm_hour);
-
-    // const int deep_sleep_sec = 10;
-    // ESP_LOGI(TAG, "Entering deep sleep for %d seconds", deep_sleep_sec);
-    // esp_deep_sleep(1000000LL * deep_sleep_sec);
 }
 
 static void print_servers(void)
