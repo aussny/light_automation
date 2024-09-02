@@ -23,8 +23,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "rtc_wdt.h"
-
 static const char *TAG = "example";
 
 #ifndef INET6_ADDRSTRLEN
@@ -34,83 +32,51 @@ static const char *TAG = "example";
 #define BLINK_GPIO 2
 #define SENSOR_GPIO 17
 
-/* Variable holding number of times ESP32 restarted since first boot.
- * It is placed into RTC memory using RTC_DATA_ATTR and
- * maintains its value when ESP32 wakes from deep sleep.
- */
-// RTC_DATA_ATTR static int boot_count = 0;
-
+static void monitor_motion(void);
 static void obtain_time(void);
+static int8_t check_hour(void);
 static int8_t setup_procedure(void);
 void blink_LED(int8_t numCycles);
 void configure_GPIOS(void);
 void time_sync_notification_cb(struct timeval *tv);
+void fadeUpLed(void);
+void fadeDownLed(void);
 
-// void watchdogHandler(void* pData)
-// {
-//     rtc_wdt_feed();
-//     vTaskDelay(100 / portTICK_PERIOD_MS);
-//     vTaskDelete(NULL);
-// }
+bool ledON = false;
 
 void app_main(void)
 {
     int8_t currentTime = setup_procedure();
-    bool motionDetected = false;
-
-    while(1)
+    
+    while(true)
     {
-        if (gpio_get_level(SENSOR_GPIO) == 1)
+        int8_t currentHour = check_hour();
+        if ((currentTime >= 8) && (currentTime <= 19))
         {
-            gpio_set_level(BLINK_GPIO, 1);
-            if (motionDetected == false)
-            {
-                ESP_LOGI(TAG, "MOTION DETECTED!");
-                motionDetected = true;
-                
-            }
-            vTaskDelay( 5000 / portTICK_PERIOD_MS);
+            monitor_motion();
         }
         else
         {
-            gpio_set_level(BLINK_GPIO, 0);
-            if (motionDetected == true)
+            if (ledON)
             {
-                ESP_LOGI(TAG, "MOTION NO LONGER DETECTED!");
-                motionDetected = false;
+               fadeDownLed(); 
             }
-            vTaskDelay( 100 / portTICK_PERIOD_MS);
         }
+        vTaskDelay(60000 / portTICK_PERIOD_MS);
     }
 }
 
 static int8_t setup_procedure(void)
 {
+    int8_t currentHour;
     configure_GPIOS();
     gpio_set_level(BLINK_GPIO, 1);
+    vTaskDelay( 5000 / portTICK_PERIOD_MS);
 
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
-    // Is time set? If not, tm_year will be (1970 - 1900).
-    if (timeinfo.tm_year < (2016 - 1900)) {
-        ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
-        obtain_time();
-        // update 'now' variable with current time
-        time(&now);
-    }
-
-    char strftime_buf[64];
-    setenv("TZ", "CST6EDT,M3.2.0/2,M11.1.0", 1); // Dallas
-    tzset();
-    localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "The current date/time in Dallas is: %s", strftime_buf);
-    ESP_LOGI(TAG, "The hours is: %d", timeinfo.tm_hour);
+    currentHour = check_hour();
     gpio_set_level(BLINK_GPIO, 0);
-    blink_LED(timeinfo.tm_hour);
-    return timeinfo.tm_hour;
+    blink_LED(currentHour);
+    return currentHour;
 }
 
 void time_sync_notification_cb(struct timeval *tv)
@@ -128,6 +94,10 @@ void configure_GPIOS(void)
 
 void blink_LED(int8_t numCycles)
 {
+    /* This function toggles the LED in the amount specified in the input
+        INPUTS: int8_t numCycles - the number of LED cycles to toggle
+        RETURNS: none    
+    */
     uint8_t ledState = 1;
     for( ; numCycles > 0; numCycles--)
     {   gpio_set_level(BLINK_GPIO, ledState);
@@ -156,6 +126,31 @@ static void print_servers(void)
                 ESP_LOGI(TAG, "server %d: %s", i, buff);
         }
     }
+}
+
+static int8_t check_hour(void)
+{
+    /* This function finds and returns the hour of the day as int8 */
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    // Is time set? If not, tm_year will be (1970 - 1900).
+    if (timeinfo.tm_year < (2016 - 1900)) {
+        ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
+        obtain_time();
+        // update 'now' variable with current time
+        time(&now);
+    }
+
+    char strftime_buf[64];
+    setenv("TZ", "CST6EDT,M3.2.0/2,M11.1.0", 1); // CST timezone config
+    tzset();
+    localtime_r(&now, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "The current date/time in Dallas is: %s", strftime_buf);
+    ESP_LOGI(TAG, "The hours is: %d", timeinfo.tm_hour);
+    return timeinfo.tm_hour;
 }
 
 static void obtain_time(void)
@@ -192,4 +187,41 @@ static void obtain_time(void)
 
     ESP_ERROR_CHECK( example_disconnect() );
     esp_netif_sntp_deinit();
+}
+
+static void monitor_motion(void)
+{
+    /* This funciton monitors motion from an IR sensor and handles the LED control */
+    if (gpio_get_level(SENSOR_GPIO) == 1)
+    {
+        if (ledON == false)
+        {
+            fadeUpLed();
+        }
+        vTaskDelay( 60000 / portTICK_PERIOD_MS);
+    }
+    else
+    {
+        gpio_set_level(BLINK_GPIO, 0);
+        if (ledON == true)
+        {
+            ESP_LOGI(TAG, "MOTION NO LONGER DETECTED!");
+            ledON = false;
+        }
+        vTaskDelay( 100 / portTICK_PERIOD_MS);
+    }
+}
+
+void fadeUpLed(void)
+{
+    /* TODO: This function fades up the LED */
+    gpio_set_level(BLINK_GPIO, 1);
+    ledON = true;
+}
+
+void fadeDownLed(void)
+{
+    /* TODO: This funciotn fades down the LED */
+    gpio_set_level(BLINK_GPIO, 0);
+    ledON = false;
 }
