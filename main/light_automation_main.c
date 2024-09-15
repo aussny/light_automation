@@ -1,3 +1,12 @@
+/*******************************************************************************************
+Light Automation Program
+
+This program is intended to monitor the time of day and control a light source depending on the
+time. If 
+
+
+
+********************************************************************************************/
 /* LwIP SNTP example
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
@@ -32,6 +41,9 @@ static const char *TAG = "example";
 
 #define LED_GPIO 2
 #define MAX_DUTY_CYCLE 0x3FF
+#define START_LED_OFF_HOUR 8           /* 08:00 set for LED off time start*/
+#define END_LED_OFF_HOUR 15            /* 19:00 set for LED off time end*/
+
 static ledc_channel_config_t ledc_channel;
 #define SENSOR_GPIO 17
 
@@ -50,41 +62,28 @@ bool ledON = false;
 
 void app_main(void)
 {
-    configure_LED();
-    blink_LED(5);
-    vTaskDelay( 1000 / portTICK_PERIOD_MS);
+    int8_t currentHour = setup_procedure();    
     while(true)
     {
-        fadeUpLed();
-        blink_LED(2);
-        vTaskDelay( 1000 / portTICK_PERIOD_MS);
-        fadeDownLed();
-        blink_LED(2);
-        vTaskDelay( 1000 / portTICK_PERIOD_MS);
+        currentHour = check_hour();
+        if ((currentHour >= START_LED_OFF_HOUR) && (currentHour <= END_LED_OFF_HOUR))
+        {
+            monitor_motion();
+        }
+        else
+        {
+            if (ledON)
+            {
+               fadeDownLed(); 
+            }
+        }
+        vTaskDelay( 4000 / portTICK_PERIOD_MS);
     }
-
-    // int8_t currentHour = setup_procedure();
-    
-    // while(true)
-    // {
-    //     currentHour = check_hour();
-    //     if ((currentHour >= 8) && (currentHour <= 19))
-    //     {
-    //         monitor_motion();
-    //     }
-    //     else
-    //     {
-    //         if (ledON)
-    //         {
-    //            fadeDownLed(); 
-    //         }
-    //     }
-    //     vTaskDelay(60000 / portTICK_PERIOD_MS);
-    // }
 }
 
 int8_t setup_procedure(void)
 {
+    /* This setup function configures the LED and timing. The LED will blink the hour of the day when the time is found. */
     int8_t currentHour;
     configure_GPIOS();
     configure_LED();
@@ -112,6 +111,7 @@ void configure_GPIOS(void)
 
 void configure_LED(void)
 {
+    /* This function configures the LED/LED strip for PWM control*/
     ledc_timer_config_t ledc_timer = {
         .duty_resolution = LEDC_TIMER_10_BIT,
         .freq_hz = 1000,
@@ -132,31 +132,19 @@ void configure_LED(void)
 
 void blink_LED(int8_t numCycles)
 {
-    /* This function toggles the LED in the amount specified in the input
-        INPUTS: int8_t numCycles - the number of LED cycles to toggle
-        RETURNS: none    
-    */
+    /* This function toggles the LED in the amount specified in the input via PWM */
 
-
-   /* OLD */
-    uint8_t ledState = 1;
     for( ; numCycles > 0; numCycles--)
     {   
-        // gpio_set_level(LED_GPIO, ledState);
         ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0);
         ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
-
         vTaskDelay(500  / portTICK_PERIOD_MS);
-        ledState = !ledState;
 
-        // gpio_set_level(LED_GPIO, ledState);
         ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0xFF);
         ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
 
         vTaskDelay(500  / portTICK_PERIOD_MS);
-        ledState = !ledState;
     }
-    // gpio_set_level(LED_GPIO, 0);
     ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0);
     ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
 
@@ -170,7 +158,6 @@ void print_servers(void)
         if (esp_sntp_getservername(i)){
             ESP_LOGI(TAG, "server %d: %s", i, esp_sntp_getservername(i));
         } else {
-            // we have either IPv4 or IPv6 address, let's print it
             char buff[INET6_ADDRSTRLEN];
             ip_addr_t const *ip = esp_sntp_getserver(i);
             if (ipaddr_ntoa_r(ip, buff, INET6_ADDRSTRLEN) != NULL)
@@ -186,7 +173,6 @@ int8_t check_hour(void)
     struct tm timeinfo;
     time(&now);
     localtime_r(&now, &timeinfo);
-    // Is time set? If not, tm_year will be (1970 - 1900).
     if (timeinfo.tm_year < (2016 - 1900)) {
         ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
         obtain_time();
@@ -247,17 +233,18 @@ void monitor_motion(void)
     {
         if (ledON == false)
         {
+            ESP_LOGI(TAG, "MOTION DETECTED!");
             fadeUpLed();
         }
-        vTaskDelay( 60000 / portTICK_PERIOD_MS);
+        vTaskDelay( 300000 / portTICK_PERIOD_MS);
     }
     else
     {
-        gpio_set_level(LED_GPIO, 0);
+        // gpio_set_level(LED_GPIO, 0);
         if (ledON == true)
         {
             ESP_LOGI(TAG, "MOTION NO LONGER DETECTED!");
-            ledON = false;
+            fadeDownLed();
         }
         vTaskDelay( 100 / portTICK_PERIOD_MS);
     }
@@ -265,9 +252,7 @@ void monitor_motion(void)
 
 void fadeUpLed(void)
 {
-    /* TODO: This function fades up the LED */
-    // gpio_set_level(LED_GPIO, 1);
-    // uint32_t maxDutyCycle = 0x3FF;
+    /* This function fades up the LED to the maximum brightness set by the MAX_DUTY_CYCLE definition */
     uint32_t ledDutyCycle;
     for (ledDutyCycle = 0; ledDutyCycle <= MAX_DUTY_CYCLE; ledDutyCycle++)
     {
@@ -276,23 +261,13 @@ void fadeUpLed(void)
         vTaskDelay( 10 / portTICK_PERIOD_MS);
     }
 
-    // for(int8_t cycles = 3; cycles >= 0; cycles--)
-    // {
-    //     ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0);
-    //     ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
-    //     vTaskDelay( 1000 / portTICK_PERIOD_MS);
-    //     ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, maxDutyCycle);
-    //     ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
-    //     vTaskDelay( 1000 / portTICK_PERIOD_MS);
-    // }
-
     ledON = true;
 }
 
 void fadeDownLed(void)
 {
-    /* TODO: This function fades down the LED */
-    // gpio_set_level(LED_GPIO, 0);
+    /* This function fades down the LED from the maximum brightness set by the MAX_DUTY_CYCLE definition */
+
     uint32_t ledDutyCycle;
     for (ledDutyCycle = MAX_DUTY_CYCLE; ledDutyCycle > 0; ledDutyCycle--)
     {
@@ -300,6 +275,7 @@ void fadeDownLed(void)
         ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
         vTaskDelay( 10 / portTICK_PERIOD_MS);
     }
+
     ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0);
     ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
     ledON = false;
