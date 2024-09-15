@@ -2,9 +2,10 @@
 Light Automation Program
 
 This program is intended to monitor the time of day and control a light source depending on the
-time. If 
+time. Motion will be monitored and the illumination will be enabled outside of the range between
+START_LED_OFF_HOUR and END_LED_OFF_HOUR.
 
-
+The program has used the simple wifi connection example from the ESP IDF as a starting point.
 
 ********************************************************************************************/
 /* LwIP SNTP example
