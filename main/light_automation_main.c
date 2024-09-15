@@ -22,6 +22,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/ledc.h"
 
 static const char *TAG = "example";
 
@@ -29,15 +30,18 @@ static const char *TAG = "example";
 #define INET6_ADDRSTRLEN 48
 #endif
 
-#define BLINK_GPIO 2
+#define LED_GPIO 2
+#define MAX_DUTY_CYCLE 0x3FF
+static ledc_channel_config_t ledc_channel;
 #define SENSOR_GPIO 17
 
-static void monitor_motion(void);
-static void obtain_time(void);
-static int8_t check_hour(void);
-static int8_t setup_procedure(void);
+void monitor_motion(void);
+void obtain_time(void);
+int8_t check_hour(void);
+int8_t setup_procedure(void);
 void blink_LED(int8_t numCycles);
 void configure_GPIOS(void);
+void configure_LED(void);
 void time_sync_notification_cb(struct timeval *tv);
 void fadeUpLed(void);
 void fadeDownLed(void);
@@ -46,35 +50,49 @@ bool ledON = false;
 
 void app_main(void)
 {
-    int8_t currentTime = setup_procedure();
-    
+    configure_LED();
+    blink_LED(5);
+    vTaskDelay( 1000 / portTICK_PERIOD_MS);
     while(true)
     {
-        int8_t currentHour = check_hour();
-        if ((currentTime >= 8) && (currentTime <= 19))
-        {
-            monitor_motion();
-        }
-        else
-        {
-            if (ledON)
-            {
-               fadeDownLed(); 
-            }
-        }
-        vTaskDelay(60000 / portTICK_PERIOD_MS);
+        fadeUpLed();
+        blink_LED(2);
+        vTaskDelay( 1000 / portTICK_PERIOD_MS);
+        fadeDownLed();
+        blink_LED(2);
+        vTaskDelay( 1000 / portTICK_PERIOD_MS);
     }
+
+    // int8_t currentHour = setup_procedure();
+    
+    // while(true)
+    // {
+    //     currentHour = check_hour();
+    //     if ((currentHour >= 8) && (currentHour <= 19))
+    //     {
+    //         monitor_motion();
+    //     }
+    //     else
+    //     {
+    //         if (ledON)
+    //         {
+    //            fadeDownLed(); 
+    //         }
+    //     }
+    //     vTaskDelay(60000 / portTICK_PERIOD_MS);
+    // }
 }
 
-static int8_t setup_procedure(void)
+int8_t setup_procedure(void)
 {
     int8_t currentHour;
     configure_GPIOS();
-    gpio_set_level(BLINK_GPIO, 1);
+    configure_LED();
+    gpio_set_level(LED_GPIO, 1);
     vTaskDelay( 5000 / portTICK_PERIOD_MS);
 
     currentHour = check_hour();
-    gpio_set_level(BLINK_GPIO, 0);
+    gpio_set_level(LED_GPIO, 0);
     blink_LED(currentHour);
     return currentHour;
 }
@@ -86,10 +104,30 @@ void time_sync_notification_cb(struct timeval *tv)
 
 void configure_GPIOS(void)
 {
-    gpio_reset_pin(BLINK_GPIO);
+    gpio_reset_pin(LED_GPIO);
     gpio_reset_pin(SENSOR_GPIO);
-    gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(SENSOR_GPIO, GPIO_MODE_INPUT);
+}
+
+void configure_LED(void)
+{
+    ledc_timer_config_t ledc_timer = {
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .freq_hz = 1000,
+        .speed_mode = LEDC_HIGH_SPEED_MODE,
+        .timer_num = LEDC_TIMER_0,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+
+    ledc_timer_config(&ledc_timer);
+    ledc_channel.channel = LEDC_CHANNEL_0;
+    ledc_channel.duty = 0;
+    ledc_channel.gpio_num = LED_GPIO;
+    ledc_channel.speed_mode = LEDC_HIGH_SPEED_MODE;
+    ledc_channel.hpoint = 0;
+    ledc_channel.timer_sel = LEDC_TIMER_0;
+    ledc_channel_config(&ledc_channel);
 }
 
 void blink_LED(int8_t numCycles)
@@ -98,20 +136,33 @@ void blink_LED(int8_t numCycles)
         INPUTS: int8_t numCycles - the number of LED cycles to toggle
         RETURNS: none    
     */
+
+
+   /* OLD */
     uint8_t ledState = 1;
     for( ; numCycles > 0; numCycles--)
-    {   gpio_set_level(BLINK_GPIO, ledState);
+    {   
+        // gpio_set_level(LED_GPIO, ledState);
+        ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0);
+        ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
+
         vTaskDelay(500  / portTICK_PERIOD_MS);
         ledState = !ledState;
-        gpio_set_level(BLINK_GPIO, ledState);
+
+        // gpio_set_level(LED_GPIO, ledState);
+        ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0xFF);
+        ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
+
         vTaskDelay(500  / portTICK_PERIOD_MS);
         ledState = !ledState;
     }
-    gpio_set_level(BLINK_GPIO, 0);
+    // gpio_set_level(LED_GPIO, 0);
+    ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0);
+    ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
 
 }
 
-static void print_servers(void)
+void print_servers(void)
 {
     ESP_LOGI(TAG, "List of configured NTP servers:");
 
@@ -128,7 +179,7 @@ static void print_servers(void)
     }
 }
 
-static int8_t check_hour(void)
+int8_t check_hour(void)
 {
     /* This function finds and returns the hour of the day as int8 */
     time_t now;
@@ -153,7 +204,7 @@ static int8_t check_hour(void)
     return timeinfo.tm_hour;
 }
 
-static void obtain_time(void)
+void obtain_time(void)
 {
     ESP_ERROR_CHECK( nvs_flash_init() );
     ESP_ERROR_CHECK(esp_netif_init());
@@ -189,7 +240,7 @@ static void obtain_time(void)
     esp_netif_sntp_deinit();
 }
 
-static void monitor_motion(void)
+void monitor_motion(void)
 {
     /* This funciton monitors motion from an IR sensor and handles the LED control */
     if (gpio_get_level(SENSOR_GPIO) == 1)
@@ -202,7 +253,7 @@ static void monitor_motion(void)
     }
     else
     {
-        gpio_set_level(BLINK_GPIO, 0);
+        gpio_set_level(LED_GPIO, 0);
         if (ledON == true)
         {
             ESP_LOGI(TAG, "MOTION NO LONGER DETECTED!");
@@ -215,13 +266,41 @@ static void monitor_motion(void)
 void fadeUpLed(void)
 {
     /* TODO: This function fades up the LED */
-    gpio_set_level(BLINK_GPIO, 1);
+    // gpio_set_level(LED_GPIO, 1);
+    // uint32_t maxDutyCycle = 0x3FF;
+    uint32_t ledDutyCycle;
+    for (ledDutyCycle = 0; ledDutyCycle <= MAX_DUTY_CYCLE; ledDutyCycle++)
+    {
+        ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, ledDutyCycle);
+        ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
+        vTaskDelay( 10 / portTICK_PERIOD_MS);
+    }
+
+    // for(int8_t cycles = 3; cycles >= 0; cycles--)
+    // {
+    //     ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0);
+    //     ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
+    //     vTaskDelay( 1000 / portTICK_PERIOD_MS);
+    //     ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, maxDutyCycle);
+    //     ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
+    //     vTaskDelay( 1000 / portTICK_PERIOD_MS);
+    // }
+
     ledON = true;
 }
 
 void fadeDownLed(void)
 {
-    /* TODO: This funciotn fades down the LED */
-    gpio_set_level(BLINK_GPIO, 0);
+    /* TODO: This function fades down the LED */
+    // gpio_set_level(LED_GPIO, 0);
+    uint32_t ledDutyCycle;
+    for (ledDutyCycle = MAX_DUTY_CYCLE; ledDutyCycle > 0; ledDutyCycle--)
+    {
+        ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, ledDutyCycle);
+        ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
+        vTaskDelay( 10 / portTICK_PERIOD_MS);
+    }
+    ledc_set_duty(ledc_channel.speed_mode, ledc_channel.channel, 0);
+    ledc_update_duty(ledc_channel.speed_mode, ledc_channel.channel);
     ledON = false;
 }
